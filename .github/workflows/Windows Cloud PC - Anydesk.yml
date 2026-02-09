@@ -1,4 +1,4 @@
-name: Windows Cloud PC - Anydesk
+name: Windows Cloud PC - noVNC
 
 on:
   workflow_dispatch:
@@ -8,15 +8,45 @@ jobs:
     name: Start Building...
     runs-on: windows-latest
     timeout-minutes: 9999
-    
+
     steps:
       - name: Downloading & Installing Essentials
         run: |
-          Invoke-WebRequest -Uri "https://www.dropbox.com/scl/fi/7eiczvgil84czu55dxep3/Downloads.bat?rlkey=wzdc1wxjsph2b7r0atplmdz3p&dl=1" -OutFile "Downloads.bat"
-          cmd /c Downloads.bat
+          # Download TightVNC MSI
+          Invoke-WebRequest -Uri "https://www.tightvnc.com/download/2.8.85/tightvnc-2.8.85-gpl-setup-64bit.msi" -OutFile "tightvnc.msi"
+          
+          # Install TightVNC silently with passwords, enable loopback, restrict to loopback only, and set port
+          msiexec /i tightvnc.msi /quiet /norestart ADDLOCAL="Server" SERVER_REGISTER_AS_SERVICE=1 SERVER_ADD_FIREWALL_EXCEPTION=1 SET_USEVNCAUTHENTICATION=1 VALUE_OF_USEVNCAUTHENTICATION=1 SET_PASSWORD=1 VALUE_OF_PASSWORD=password SET_USECONTROLAUTHENTICATION=1 VALUE_OF_USECONTROLAUTHENTICATION=1 SET_CONTROLPASSWORD=1 VALUE_OF_CONTROLPASSWORD=password SET_ALLOWLOOPBACK=1 VALUE_OF_ALLOWLOOPBACK=1 SET_LOOPBACKONLY=1 VALUE_OF_LOOPBACKONLY=1 SET_RFBPORT=1 VALUE_OF_RFBPORT=5901
+          
+          # Ensure loopback settings via registry (in case MSI properties don't apply fully)
+          reg add "HKLM\SOFTWARE\TightVNC\Server" /v AllowLoopback /t REG_DWORD /d 1 /f
+          reg add "HKLM\SOFTWARE\TightVNC\Server" /v LoopbackOnly /t REG_DWORD /d 1 /f
+          
+          # Restart TightVNC service
+          net stop tvnserver
+          net start tvnserver
+          
+          # Install websockify
+          pip install websockify
+          
+          # Clone noVNC
+          git clone https://github.com/novnc/noVNC.git C:\noVNC
 
-      - name: Log In To AnyDesk
-        run: cmd /c start.bat
+      - name: Setup cloudflared
+        uses: AnimMouse/setup-cloudflared@v2
+
+      - name: Start noVNC and Cloudflared Tunnel
+        run: |
+          # Start websockify (noVNC proxy)
+          Start-Process python -ArgumentList "-m", "websockify", "--web", "C:\noVNC", "6080", "localhost:5901"
+          
+          # Wait a bit for websockify to start
+          Start-Sleep -Seconds 10
+          
+          # Start Cloudflared tunnel to expose noVNC
+          cloudflared tunnel --url http://localhost:6080
+          
+          # Note: Check the GitHub Actions logs for the trycloudflare.com URL. Access it in your browser at https://<tunnel-url>/vnc.html, leave Host and Port blank in the dialog, set Path to 'websockify', enter the VNC password 'password', and click Connect.
 
       - name: Time Counter
         run: Start-Sleep -Seconds 14400
